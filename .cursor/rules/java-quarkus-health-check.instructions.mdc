@@ -1,0 +1,49 @@
+---
+description: Quarkus apps use SmallRye Health OOTB probes at /q/health; do not invent a JAX-RS health resource
+globs: "**/*.{java,kt,yml,yaml}"
+alwaysApply: false
+---
+
+# Quarkus health checks
+
+Add `quarkus-smallrye-health`. Use the built-in MicroProfile Health endpoints. Do **not** create a JAX-RS `@Path("/health")` (or similar) resource. Do not implement liveness/readiness by hand.
+
+Quarkus serves (non-application root `/q` by default):
+
+| Path | Probe |
+|---|---|
+| `/q/health/live` | liveness |
+| `/q/health/ready` | readiness (includes extension checks) |
+| `/q/health/started` | startup |
+| `/q/health` | all of the above |
+
+Keep `quarkus.http.non-application-root-path` as `/q` unless the platform mandates otherwise. Do not move health onto the application root to “make Swagger show it.”
+
+Kubernetes / GKE:
+
+- liveness → `GET /q/health/live`
+- readiness → `GET /q/health/ready`
+- startup → `GET /q/health/started` when the platform supports it
+
+```yaml
+quarkus:
+  smallrye-health:
+    root-path: health
+```
+
+That yields `/q/health`, `/q/health/live`, `/q/health/ready`, `/q/health/started`. Do not set `root-path` to a second tree that duplicates probes.
+
+## Extra checks
+
+Add `@Liveness`, `@Readiness`, or `@Startup` beans **only** for checks the extensions do not already provide. Do not wrap the OOTB endpoints.
+
+```kotlin
+@ApplicationScoped
+@Readiness
+class DownstreamReadyCheck : HealthCheck {
+    override fun call(): HealthCheckResponse =
+        HealthCheckResponse.named("downstream-config").up().build()
+}
+```
+
+A custom check must not call downstream HTTP on every probe if that would stampede `getPosDeviceTransaction` / `getProducts`. Config/presence checks are fine; a full downstream GET is not.

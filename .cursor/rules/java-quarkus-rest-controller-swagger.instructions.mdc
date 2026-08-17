@@ -1,0 +1,224 @@
+---
+description: Quarkus REST controllers document OpenAPI with MicroProfile annotations and log every inbound request in GCP JSON format
+globs: "**/*.{java,kt,yml,yaml}"
+alwaysApply: false
+---
+
+# Quarkus REST: OpenAPI annotations
+
+Document every REST endpoint with **SmallRye OpenAPI** (MicroProfile OpenAPI annotations). Add `quarkus-smallrye-openapi`. Do not rely on unannotated types to “guess” the contract. HTTP method comes from `@GET` / `@POST` / `@PUT` / `@PATCH` / `@DELETE`; `@Operation` describes it.
+
+When more than one **2xx** is possible, each `@APIResponse` must state the **distinctive** circumstance that produces that status (not “success” twice).
+
+Declare HTTP security schemes once (`@OpenAPIDefinition` / `@SecurityScheme`). Reference them on resources or methods with `@SecurityRequirement`. Document **401** when a scheme is required. Declare Swagger UI **servers** on `@OpenAPIDefinition`; **localhost must be present and must be first** (default on first load).
+
+## Servers (domain dropdown)
+
+Swagger UI’s server dropdown is the OpenAPI `servers` list. **localhost must always be in the list and must always be the first entry** so it is the default on **first load**. Later visits may keep Swagger UI’s last selected server. Do not sort production or integration ahead of localhost. Add the following to `application.yaml` so Quarkus does not prepend another URL:
+
+```yaml
+quarkus:
+  smallrye-openapi:
+    auto-add-server: false
+```
+
+```kotlin
+@OpenAPIDefinition(
+    info = Info(title = "Summary API", version = "1.0.0"),
+    servers = [
+        Server(url = "http://localhost:8080", description = "localhost"),
+        Server(url = "https://integration.example.com", description = "integration"),
+        Server(url = "https://api.example.com", description = "production"),
+    ],
+    components = Components(
+        securitySchemes = [
+            SecurityScheme(
+                securitySchemeName = "bearerAuth",
+                type = SecuritySchemeType.HTTP,
+                scheme = "bearer",
+                bearerFormat = "API Key",
+                description = "API key sent as Authorization: Bearer <token>",
+            ),
+            SecurityScheme(
+                securitySchemeName = "basicAuth",
+                type = SecuritySchemeType.HTTP,
+                scheme = "basic",
+                description = "HTTP Basic (username and password)",
+            ),
+            SecurityScheme(
+                securitySchemeName = "apiKeyHeader",
+                type = SecuritySchemeType.APIKEY,
+                apiKeyName = "X-API-Key",
+                `in` = SecuritySchemeIn.HEADER,
+                description = "API key in the X-API-Key header",
+            ),
+        ],
+    ),
+)
+class OpenApiConfig
+```
+
+Use real integration/production base URLs for this service. Do not duplicate the same `servers` list in `application.yaml` (duplicate dropdown rows). Do not omit localhost. Rely on Swagger UI remembering the last selected server; localhost is only the default when there is no stored selection.
+
+## Inbound request logging
+
+Log **every** inbound HTTP request (no exclude pattern for health or other paths). Add `quarkus-logging-json`. Write console logs in **GCP** structured JSON (`severity`, Cloud Logging timestamps/trace fields). Enable the HTTP access log so each request is a log line; do not implement a custom request-logger for this.
+
+```yaml
+quarkus:
+  log:
+    console:
+      json:
+        enabled: true
+        log-format: gcp
+  http:
+    record-request-start-time: true
+    access-log:
+      enabled: true
+```
+
+Do not set `quarkus.http.access-log.enabled` to `false`. Do not use `log-format: ecs` or `default` for this service. Do not log request bodies or `Authorization` on the access line. Do not put secrets in query strings (they will appear in the access log).
+
+## Authentication schemes
+
+Define every scheme the API actually uses. Names must match `@SecurityRequirement`. Do not invent schemes the runtime does not enforce.
+
+Apply a scheme on the resource (all methods) or on one method. An unauthenticated method must set empty security so it does not inherit the class requirement.
+
+```kotlin
+@Path("/summary")
+@Tag(name = "Summary")
+@SecurityRequirement(name = "bearerAuth")
+class SummaryResource { ... }
+
+@POST
+@Path("login")
+@SecurityRequirement(name = "basicAuth")
+@Operation(summary = "Login", description = "Exchanges Basic credentials for a session. No bearer token required.")
+fun login(...): Uni<Session> { ... }
+
+@GET
+@Path("health")
+@SecurityRequirements(value = [])
+@Operation(summary = "Liveness", description = "Public liveness probe. No credentials.")
+fun health(): String = "OK"
+```
+
+Use `bearerAuth` for Bearer tokens, `basicAuth` for Basic, `apiKeyHeader` (or equivalent) for a custom header. If two schemes are alternatives, list two `@SecurityRequirement` annotations on the same method (OpenAPI OR). If both are required together, put both names on one `@SecurityRequirement` (OpenAPI AND) — only when the code actually requires both.
+
+## Endpoint
+
+```kotlin
+@Path("/summary")
+@Tag(name = "Summary")
+@SecurityRequirement(name = "bearerAuth")
+class SummaryResource(
+    @RestClient private val posClient: PosDeviceClient,
+    @RestClient private val productClient: ProductClient,
+) {
+
+    @GET
+    @Path("{id}")
+    @Operation(
+        summary = "Get a combined POS and product summary",
+        description = "Loads POS device transactions and products in parallel and returns a summary report for the given id.",
+    )
+    @APIResponse(
+        responseCode = "200",
+        description = "Summary built from both downstream payloads.",
+        content = [Content(mediaType = "application/json", schema = Schema(implementation = SummaryReport::class))],
+    )
+    @APIResponse(
+        responseCode = "204",
+        description = "Both downstream calls succeeded and there is no summary to emit (empty transaction list and no products).",
+    )
+    @APIResponse(responseCode = "400", description = "Path id failed validation (blank or wrong format).")
+    @APIResponse(responseCode = "401", description = "Caller is not authenticated.")
+    @APIResponse(responseCode = "404", description = "No POS device or product exists for this id.")
+    @APIResponse(responseCode = "502", description = "A downstream API failed after retries or returned an unexpected error.")
+    @APIResponse(responseCode = "503", description = "A downstream circuit breaker is open.")
+    fun getSummary(
+        @PathParam("id")
+        @Parameter(description = "POS device / product correlation id", required = true, example = "dev-123")
+        @NotBlank
+        @Pattern(regexp = "^[A-Za-z0-9_-]{1,64}$")
+        id: String,
+    ): Uni<SummaryReport> { ... }
+
+    @POST
+    @Path("{id}/notes")
+    @Operation(
+        summary = "Add a note to a summary",
+        description = "Stores a note against an existing summary id.",
+    )
+    @RequestBody(
+        required = true,
+        description = "Note to attach",
+        content = [Content(mediaType = "application/json", schema = Schema(implementation = SummaryNoteRequest::class))],
+    )
+    @APIResponse(
+        responseCode = "201",
+        description = "Note created. Returned when this id did not already have a note.",
+        content = [Content(mediaType = "application/json", schema = Schema(implementation = SummaryNote::class))],
+    )
+    @APIResponse(
+        responseCode = "200",
+        description = "Note replaced. Returned when a note already existed for this id.",
+        content = [Content(mediaType = "application/json", schema = Schema(implementation = SummaryNote::class))],
+    )
+    @APIResponse(responseCode = "400", description = "Request body failed validation.")
+    @APIResponse(responseCode = "404", description = "Summary id does not exist.")
+    fun addNote(
+        @PathParam("id")
+        @Parameter(description = "Summary id", required = true, example = "dev-123")
+        @NotBlank
+        id: String,
+        body: SummaryNoteRequest,
+    ): Uni<SummaryNote> { ... }
+}
+```
+
+## String parameters
+
+Annotate each path, query, or header string with `@Parameter` (description, required, example) and Bean Validation (`@NotBlank`, `@Size`, `@Pattern`, …). OpenAPI must reflect those constraints. Query example:
+
+```kotlin
+@QueryParam("cursor")
+@Parameter(description = "Opaque pagination cursor from a previous response", required = false)
+@Size(max = 256)
+cursor: String?,
+```
+
+## Schemas (payload, return, definitions)
+
+Put `@Schema` on every request/response type. Repeat Bean Validation on fields. `required` / `example` / `description` belong on the schema, not only in prose.
+
+```kotlin
+@Schema(name = "SummaryReport", description = "Combined POS transaction and product summary")
+data class SummaryReport(
+    @field:Schema(description = "Correlation id", required = true, example = "dev-123")
+    @field:NotBlank
+    val id: String,
+    @field:Schema(description = "Human-readable title", required = true, example = "Till 4 — March")
+    @field:Size(min = 1, max = 200)
+    val title: String,
+    @field:Schema(description = "Transaction count included in the summary", required = true, example = "12")
+    @field:Min(0)
+    val transactionCount: Int,
+)
+
+@Schema(name = "SummaryNoteRequest", description = "Note submitted by the caller")
+data class SummaryNoteRequest(
+    @field:Schema(description = "Note body", required = true, example = "Reconciled against EOD")
+    @field:NotBlank
+    @field:Size(max = 2000)
+    val text: String,
+)
+```
+
+Use `implementation = …` on `@Content` / `@Schema` so payload and return types point at these definitions. Do not leave request or response as untyped `Object` / `JsonObject`.
+
+## Status codes
+
+- **2xx:** one `@APIResponse` per code. If two successes exist, the descriptions must be mutually exclusive (e.g. 200 = existing note replaced; 201 = first note created; 204 = success with empty body).
+- **4xx / 5xx:** document every status the endpoint can actually return (validation, auth, not found, downstream failure, circuit open). Do not list statuses the code never produces.

@@ -1,0 +1,75 @@
+---
+description: Quarkus REST controllers are covered by inbound HTTP integration tests with in-repo WireMock; do not mock REST clients
+globs: "**/*.{java,kt,yml,yaml}"
+alwaysApply: false
+---
+
+# Quarkus REST: automated tests
+
+Cover the service with **inbound HTTP integration tests only**. Do not add Mockito unit tests of resources or REST client interfaces. Do not call real POS, product, or Secret Manager. All stubs and fixtures stay **in the repo**.
+
+Start the app (`@QuarkusTest`). HTTP-call the inbound API (RestAssured). Use **WireMock** for `pos-client` and `product-client`. The real REST clients, Mutiny combine, timeouts, retries, circuit breaker, and `toSummary` must run.
+
+These are isolated integration tests, not unit tests. Do not label them as unit tests.
+
+## Test application settings
+
+Use `src/test/resources/application.yaml` (or `%test`). **Hardcode** API keys there so boot does not call GCP Secret Manager and the 60-minute refresh skips SM (`POS_CLIENT_API_KEY` / `PRODUCT_CLIENT_API_KEY` set). Point client URLs at WireMock. These keys are test-only; do not use production secrets.
+
+```yaml
+POS_CLIENT_API_KEY: test-pos-api-key
+PRODUCT_CLIENT_API_KEY: test-product-api-key
+
+quarkus:
+  rest-client:
+    pos-client:
+      url: http://localhost:${wiremock.port}
+    product-client:
+      url: http://localhost:${wiremock.port}
+```
+
+Do not use `${sm//…}` in test settings. Do not leave client `url` pointing at integration/production.
+
+## What to assert
+
+Call the inbound route. Assert **status and body** (mapping bugs are missed by status-only checks). Cover:
+
+- Happy path: both WireMock stubs return 200; combined JSON is correct
+- Downstream 4xx/5xx, timeouts, retries, open circuit → this API’s documented error statuses
+- Validation 400 on bad path/query
+- WireMock received the expected path and `Authorization: Bearer test-pos-api-key` / `test-product-api-key`
+
+```kotlin
+@QuarkusTest
+@QuarkusTestResource(WireMockTestResource::class)
+class SummaryResourceTest {
+
+    @Test
+    fun getSummaryCombinesBothDownstreams() {
+        wireMock.stubFor(
+            get(urlPathEqualTo("/pos-device-transactions/dev-123"))
+                .willReturn(okJson("""{"id":"dev-123"}""")),
+        )
+        wireMock.stubFor(
+            get(urlPathEqualTo("/products/dev-123"))
+                .willReturn(okJson("""{"id":"dev-123"}""")),
+        )
+
+        given()
+            .get("/summary/dev-123")
+            .then()
+            .statusCode(200)
+            .body("id", equalTo("dev-123"))
+            .body("transactionCount", equalTo(12))
+
+        wireMock.verify(
+            getRequestedFor(urlPathEqualTo("/pos-device-transactions/dev-123"))
+                .withHeader("Authorization", equalTo("Bearer test-pos-api-key")),
+        )
+    }
+}
+```
+
+Keep WireMock mappings in the test (or `src/test/resources/wiremock`). Do not load stubs from a network share or another service.
+
+Do **not** `@InjectMock` / Mockito the REST clients. Do not `@QuarkusTest` a test that never opens HTTP to this API if the goal is to cover `getSummary`.

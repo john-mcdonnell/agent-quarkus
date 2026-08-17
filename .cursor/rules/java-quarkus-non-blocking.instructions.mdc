@@ -1,0 +1,42 @@
+---
+description: Quarkus non-blocking code uses Mutiny on the event loop; not coroutines or virtual threads
+globs: "**/*.{java,kt}"
+alwaysApply: false
+---
+
+# Quarkus non-blocking: Mutiny event loop
+
+Use **Mutiny** (`Uni` / `Uni.combine`) for non-blocking I/O. This **replaces coroutines**. Do **not** use coroutines for non-blocking work (`suspend`, `async`, `coroutineScope`, `runBlocking`, `Flow` as a substitute for `Uni` / `Multi`).
+
+Quarkus runs a `Uni` pipeline on the **event loop**. Mutiny burns a node more slowly so one pod can keep more I/O in flight; downstream needs that same admitted-rate ceiling.
+
+Compose independent I/O with `Uni.combine` so work starts together and `map` runs only after all succeed. Downstream calls must return `Uni`, not blocking types. `map` must be an in-memory transform only — it runs on the event loop; a slow `map` stalls that loop.
+
+## Example: REST handler with parallel downstream calls
+
+```kotlin
+@GET
+@Path("{id}")
+fun getSummary(@PathParam("id") id: String): Uni<SummaryReport> =
+    Uni.combine().all().unis(
+        posClient.getPosDeviceTransaction(id),
+        productClient.getProducts(id),
+    ).asTuple()
+        .map { tuple -> toSummary(tuple.item1, tuple.item2) }
+```
+
+```kotlin
+@RegisterRestClient(configKey = "pos-client")
+interface PosDeviceClient {
+    @GET
+    @Path("/pos-device-transactions/{id}")
+    fun getPosDeviceTransaction(@PathParam("id") id: String): Uni<PosDeviceTransaction>
+}
+```
+
+## Do not
+
+- `@RunOnVirtualThread` on a Mutiny / event-loop path
+- Blocking APIs (plain DTO / `get()` / JDBC) where a `Uni` is required
+- `.await()`, `.get()`, `Thread.sleep`, or other blocking on the event loop
+- I/O, waits, or heavy CPU inside `.map`

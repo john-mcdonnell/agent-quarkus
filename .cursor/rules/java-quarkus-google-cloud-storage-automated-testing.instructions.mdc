@@ -1,0 +1,77 @@
+---
+description: Quarkus GCS get/put tests use in-process LocalStorageHelper; do not Mockito Storage or call real GCS
+globs: "**/*.{java,kt,yml,yaml}"
+alwaysApply: false
+---
+
+# Quarkus GCS: automated tests
+
+For Google Cloud Storage **get/put only**, tests use **`LocalStorageHelper`** (`com.google.cloud:google-cloud-nio`, test scope). That is an in-memory `Storage` backend. Do **not** call a real bucket. Do **not** Mockito / `@InjectMock` `Storage`. Do **not** start `fake-gcs-server` or Testcontainers for this.
+
+Keep tests **single-threaded**. `LocalStorageHelper` is not thread-safe. If tests run in parallel, or you need signed URLs, generations, checksums, or IAM, stop using this helper.
+
+Seed objects from **in-repo** files (`src/test/resources/...`). Do not read fixtures from GCS or a network share.
+
+## Replace `Storage` in `@QuarkusTest`
+
+Produce a test `Storage` from `LocalStorageHelper.getOptions().getService()`. `@Mock` so it replaces the Google client. Reset/seed in `@BeforeEach` (`getOptions()` resets the static fake).
+
+```kotlin
+@Mock
+class TestStorageProducer {
+    @Produces
+    @Singleton
+    fun storage(): Storage = LocalStorageHelper.getOptions().getService()
+}
+
+@QuarkusTest
+class GcsGetPutTest {
+
+    @Inject
+    lateinit var storage: Storage
+
+    @BeforeEach
+    fun seedBucket() {
+        LocalStorageHelper.getOptions()
+        val bytes = javaClass.getResource("/gcs/hello.txt")!!.readBytes()
+        storage.create(
+            BlobInfo.newBuilder("test-bucket", "hello.txt").build(),
+            bytes,
+        )
+    }
+
+    @Test
+    fun inboundApiReadsObject() {
+        given()
+            .get("/storage/hello")
+            .then()
+            .statusCode(200)
+            .body(equalTo("hello\n"))
+    }
+
+    @Test
+    fun inboundApiPutsNamedObject() {
+        val objectName = "notes/${UUID.randomUUID()}.txt"
+        val content = UUID.randomUUID().toString()
+
+        given()
+            .body(content)
+            .post("/storage/$objectName")
+            .then()
+            .statusCode(201)
+
+        assertObjectText("test-bucket", objectName, content)
+    }
+
+    private fun assertObjectText(bucket: String, objectName: String, content: String) {
+        val blob = storage.get(bucket, objectName)
+        assertNotNull(blob)
+        assertEquals(objectName, blob.name)
+        assertEquals(content, String(blob.getContent(), Charsets.UTF_8))
+    }
+}
+```
+
+Cover get and put through the **inbound HTTP API** (same as other controller tests). After a put, assert the object **name** and **text** via `assertObjectText(bucket, objectName, content)`. Do not stop at HTTP 201. Put tests must use a **UUID** object name and content so they do not depend on leftover objects or hardcoded strings.
+
+Do not set `quarkus.google.cloud.storage.host-override` to a real emulator unless you have left this helper. Do not use production bucket names or credentials in test settings.
