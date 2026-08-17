@@ -1,5 +1,5 @@
 ---
-description: Stripe uses a very thin blocking SDK adapter that returns repo DTOs only; mock that adapter with Mockito in tests; event-loop callers offload with @RunOnVirtualThread; API key is env then ${sm//}
+description: Stripe uses a very thin blocking SDK adapter that returns repo DTOs only; mock that adapter with Mockito under @QuarkusTest; event-loop callers offload with @RunOnVirtualThread; API key is env then ${sm//}
 globs: "**/adapter/**/*.{java,kt},**/src/test/adapter/**/*.{java,kt},**/application.yml,**/application.yaml,**/application.properties"
 alwaysApply: false
 ---
@@ -16,13 +16,13 @@ The adapter **may** populate a model with data returned from the SDK (copy field
 
 The adapter **must not** return SDK models (`PaymentIntent`, `Customer`, or any other `com.stripe` type). It **must** return a DTO class **defined in this repo**. Do not leak SDK types on the adapter method signature (parameters or return type).
 
-Because the wrapper is that thin, **mock it** in automated tests. Use **Mockito**. Mock the adapter; return repo DTOs. Do not mock `StripeClient`. Do not call Stripe. Do not stub `com.stripe` models. Fixture values are **UUIDs** so tests stay isolated under parallel runs.
+Because the wrapper is that thin, **mock it** in automated tests. Use **`@QuarkusTest`** and Mockito **`@InjectMock`** on the adapter. Inject the real caller with CDI (`@Inject`). Return repo DTOs. Do not use `MockitoExtension`, `@Mock`, or `@InjectMocks`. Do not mock `StripeClient`. Do not call Stripe. Do not stub `com.stripe` models. Fixture values are **UUIDs** so tests stay isolated under parallel runs. `@QuarkusTest` still boots the app: the test class **is** the `QuarkusTestProfile` (`@TestProfile` on itself). Put **every** property override in `getConfigOverrides()` — not only `STRIPE_API_KEY`. **Use this instead of a test `application.yaml`** (or `application.yml` / `application.properties`). Do not add those files for test overrides. Overriding `STRIPE_API_KEY` there keeps `${STRIPE_API_KEY:${sm//…}}` from calling Secret Manager.
 
 ## API key
 
 Evaluate the Stripe secret key in this order. Do not hardcode it. Do not load it in `@PostConstruct`. Add `quarkus-config-yaml` and `quarkus-google-cloud-secret-manager`. Do not also define the same key in `application.properties`.
 
-1. **Environment variable** `STRIPE_API_KEY` — overrides everything else. Use this for tests.
+1. **Environment variable** `STRIPE_API_KEY` — overrides everything else. Use this for local runs.
 2. **`application.yaml`** — `${STRIPE_API_KEY:${sm//stripe-api-key}}`. Same env var; GCP Secret Manager only if that variable is **unset**.
 
 An **empty** env var counts as set (it does not fall through to Secret Manager). If the env var is unset and Secret Manager cannot be read, **startup must fail**. Do not catch that. `${sm//stripe-api-key}` is the secret id (latest, default project). Inject `stripe.api-key` into the `StripeClient` producer.
@@ -84,14 +84,18 @@ class PaymentResource(
 ```
 
 ```kotlin
-@ExtendWith(MockitoExtension::class)
-class ChargeServiceTest {
+@QuarkusTest
+@TestProfile(ChargeServiceTest::class)
+class ChargeServiceTest : QuarkusTestProfile {
 
-    @Mock
+    @InjectMock
     lateinit var stripePaymentAdapter: StripePaymentAdapter
 
-    @InjectMocks
+    @Inject
     lateinit var chargeService: ChargeService
+
+    override fun getConfigOverrides(): Map<String, String> =
+        mapOf("STRIPE_API_KEY" to UUID.randomUUID().toString())
 
     @Test
     fun usesAdapterDto() {
