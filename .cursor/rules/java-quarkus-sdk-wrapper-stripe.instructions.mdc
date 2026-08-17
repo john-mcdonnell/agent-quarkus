@@ -1,5 +1,5 @@
 ---
-description: Stripe uses a very thin blocking SDK adapter that returns repo DTOs only, never SDK types or business logic; event-loop callers offload with @RunOnVirtualThread; API key is env then ${sm//}
+description: Stripe uses a very thin blocking SDK adapter that returns repo DTOs only; mock that adapter with Mockito in tests; event-loop callers offload with @RunOnVirtualThread; API key is env then ${sm//}
 globs: "**/adapter/**/*.{java,kt},**/src/test/adapter/**/*.{java,kt},**/application.yml,**/application.yaml,**/application.properties"
 alwaysApply: false
 ---
@@ -15,6 +15,8 @@ The SDK wrapper **must never, under any circumstances**, contain business logic.
 The adapter **may** populate a model with data returned from the SDK (copy fields). Copying inbound DTO fields onto SDK request params is the same: field copy, not a transformation. It **must not** aggregate, summarise, or otherwise transform that data. Those transformations belong in a **business layer**, not the adapter.
 
 The adapter **must not** return SDK models (`PaymentIntent`, `Customer`, or any other `com.stripe` type). It **must** return a DTO class **defined in this repo**. Do not leak SDK types on the adapter method signature (parameters or return type).
+
+Because the wrapper is that thin, **mock it** in automated tests. Use **Mockito**. Mock the adapter; return repo DTOs. Do not mock `StripeClient`. Do not call Stripe. Do not stub `com.stripe` models. Fixture values are **UUIDs** so tests stay isolated under parallel runs.
 
 ## API key
 
@@ -78,6 +80,29 @@ class PaymentResource(
         stripePaymentAdapter.createPaymentIntent(
             CreatePaymentIntentCommand(amount = request.amount, currency = request.currency),
         )
+}
+```
+
+```kotlin
+@ExtendWith(MockitoExtension::class)
+class ChargeServiceTest {
+
+    @Mock
+    lateinit var stripePaymentAdapter: StripePaymentAdapter
+
+    @InjectMocks
+    lateinit var chargeService: ChargeService
+
+    @Test
+    fun usesAdapterDto() {
+        val paymentIntentId = UUID.randomUUID().toString()
+        whenever(stripePaymentAdapter.createPaymentIntent(any()))
+            .thenReturn(PaymentIntentDto(id = paymentIntentId, status = "requires_payment_method"))
+
+        val result = chargeService.charge(CreatePaymentIntentCommand(amount = 1200, currency = "gbp"))
+
+        assertEquals(paymentIntentId, result.id)
+    }
 }
 ```
 
