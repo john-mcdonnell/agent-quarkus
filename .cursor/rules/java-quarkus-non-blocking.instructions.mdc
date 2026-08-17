@@ -1,5 +1,5 @@
 ---
-description: Quarkus non-blocking code uses Mutiny on the event loop; not coroutines or virtual threads
+description: Quarkus non-blocking code uses Mutiny on the event loop; not coroutines
 globs: "**/*.{java,kt}"
 alwaysApply: false
 ---
@@ -36,7 +36,7 @@ interface PosDeviceClient {
 
 ## Do not
 
-- `@RunOnVirtualThread` on a Mutiny / event-loop path
+- `@RunOnVirtualThread` on a method that returns `Uni` (or `CompletionStage` / `Multi`)
 - Blocking APIs (plain DTO / `get()` / JDBC) where a `Uni` is required
 - `.await()`, `.get()`, `Thread.sleep`, or other blocking on the event loop
 - I/O, waits, or heavy CPU inside `.map`

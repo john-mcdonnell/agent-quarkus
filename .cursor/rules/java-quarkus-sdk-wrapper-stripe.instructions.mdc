@@ -1,0 +1,86 @@
+---
+description: Stripe uses the official blocking SDK behind an adapter; event-loop callers offload with @RunOnVirtualThread, never the worker pool
+globs: "**/*.{java,kt,properties,yml,yaml}"
+alwaysApply: false
+---
+
+# Stripe: official SDK, blocking adapter, virtual-thread offload
+
+Talk to Stripe with the official **stripe-java** SDK (`StripeClient`), not a Quarkus REST client. Wrap `StripeClient` in an adapter. The adapter is **blocking**. That is the cost of the SDK; do not pretend the HTTP call is non-blocking.
+
+Do **not** hardcode the secret key. Inject it from config (environment first).
+
+## Thread policy
+
+The adapter does **not** choose a thread. No `@RunOnVirtualThread`, no `@Blocking`, on the adapter.
+
+`@RunOnVirtualThread` is **optional** and belongs on the **caller** (the JAX-RS resource method, or other entrypoint) **only when that caller would otherwise run on the event loop**. If the caller is already on a virtual thread, or is not on the event loop, call the adapter with no extra annotation.
+
+Event-loop paths must **scale**. Do **not** offload Stripe with `@Blocking` or any other hop onto the capped OS worker pool. A blocking signature without `@RunOnVirtualThread` is the worker pool — that is not acceptable for Stripe.
+
+A resource that needs the SDK result **cannot** stay a `Uni` event-loop method. Give it a concrete return type and `@RunOnVirtualThread`. Do not wrap the SDK in `Uni` on the event loop. Do not mix `@RunOnVirtualThread` with a `Uni` (or `CompletionStage` / `Multi`) return type.
+
+Default `HttpURLConnection` can pin a carrier. Do not "fix" pinning with `@Blocking`.
+
+## Example
+
+```kotlin
+@ApplicationScoped
+class StripeClientProducer {
+    @Produces
+    @ApplicationScoped
+    fun stripeClient(
+        @ConfigProperty(name = "stripe.api-key") apiKey: String,
+    ): StripeClient = StripeClient(apiKey)
+}
+
+@ApplicationScoped
+class StripePaymentAdapter(
+    private val stripeClient: StripeClient,
+) {
+    fun createPaymentIntent(params: PaymentIntentCreateParams): PaymentIntent =
+        stripeClient.v1().paymentIntents().create(params)
+}
+
+@Path("/payments")
+class PaymentResource(
+    private val stripePaymentAdapter: StripePaymentAdapter,
+) {
+    @POST
+    @RunOnVirtualThread
+    fun create(request: CreatePaymentRequest): PaymentResponse {
+        val intent = stripePaymentAdapter.createPaymentIntent(toParams(request))
+        return PaymentResponse(intent.id)
+    }
+}
+```
+
+## Do not
+
+```kotlin
+@ApplicationScoped
+class StripePaymentAdapter(
+    private val stripeClient: StripeClient,
+) {
+    @RunOnVirtualThread
+    fun createPaymentIntent(params: PaymentIntentCreateParams): PaymentIntent =
+        stripeClient.v1().paymentIntents().create(params)
+}
+
+@Path("/payments")
+class PaymentResource(
+    private val stripePaymentAdapter: StripePaymentAdapter,
+) {
+    @POST
+    @Blocking
+    fun create(request: CreatePaymentRequest): PaymentResponse =
+        PaymentResponse(stripePaymentAdapter.createPaymentIntent(toParams(request)).id)
+
+    @POST
+    @Path("reactive")
+    fun createReactive(request: CreatePaymentRequest): Uni<PaymentResponse> =
+        Uni.createFrom().item {
+            PaymentResponse(stripePaymentAdapter.createPaymentIntent(toParams(request)).id)
+        }
+}
+```
