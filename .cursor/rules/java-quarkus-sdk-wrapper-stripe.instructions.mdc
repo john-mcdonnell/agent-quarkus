@@ -16,7 +16,7 @@ The adapter **may** populate a model with data returned from the SDK (copy field
 
 The adapter **must not** return SDK models (`PaymentIntent`, `Customer`, or any other `com.stripe` type). It **must** return a DTO class **defined in this repo**. Do not leak SDK types on the adapter method signature (parameters or return type).
 
-Because the wrapper is that thin, **mock it** in automated tests. Use **`@QuarkusTest`** and Mockito **`@InjectMock`** on the adapter. Inject the real caller with CDI (`@Inject`). Return repo DTOs. Do not use `MockitoExtension`, `@Mock`, or `@InjectMocks`. Do not mock `StripeClient`. Do not call Stripe. Do not stub `com.stripe` models. Fixture values are **UUIDs** so tests stay isolated under parallel runs. `@QuarkusTest` still boots the app: the test class **is** the `QuarkusTestProfile` (`@TestProfile` on itself). Put **every** property override in `getConfigOverrides()` — not only `STRIPE_API_KEY`. **Use this instead of a test `application.yaml`** (or `application.yml` / `application.properties`). Do not add those files for test overrides. Overriding `STRIPE_API_KEY` there keeps `${STRIPE_API_KEY:${sm//…}}` from calling Secret Manager.
+Because the wrapper is that thin, **mock it** in automated tests. Use **`@QuarkusTest`** and Mockito **`@InjectMock`** on the adapter. Inject the real caller with CDI (`@Inject`). Return repo DTOs. Do not use `MockitoExtension`, `@Mock`, or `@InjectMocks`. Do not mock `StripeClient`. Do not call Stripe. Do not stub `com.stripe` models. Fixture values are **UUIDs** so tests stay isolated under parallel runs. `@QuarkusTest` still boots the app. Put **every** property override in `getConfigOverrides()` — not only `STRIPE_API_KEY`. **Use this instead of a test `application.yaml`** (or `application.yml` / `application.properties`). Do not add those files for test overrides. Do **not** copy shared keys onto every test class. Put shared overrides (including `STRIPE_API_KEY`, so `${STRIPE_API_KEY:${sm//…}}` does not call Secret Manager) on a **reusable** `QuarkusTestProfile`. Point tests at that profile with `@TestProfile`. Test-only extras: a subclass that merges `super.getConfigOverrides()` with more keys.
 
 ## API key
 
@@ -84,18 +84,20 @@ class PaymentResource(
 ```
 
 ```kotlin
+open class StripeTestProfile : QuarkusTestProfile {
+    override fun getConfigOverrides(): Map<String, String> =
+        mapOf("STRIPE_API_KEY" to UUID.randomUUID().toString())
+}
+
 @QuarkusTest
-@TestProfile(ChargeServiceTest::class)
-class ChargeServiceTest : QuarkusTestProfile {
+@TestProfile(StripeTestProfile::class)
+class ChargeServiceTest {
 
     @InjectMock
     lateinit var stripePaymentAdapter: StripePaymentAdapter
 
     @Inject
     lateinit var chargeService: ChargeService
-
-    override fun getConfigOverrides(): Map<String, String> =
-        mapOf("STRIPE_API_KEY" to UUID.randomUUID().toString())
 
     @Test
     fun usesAdapterDto() {
