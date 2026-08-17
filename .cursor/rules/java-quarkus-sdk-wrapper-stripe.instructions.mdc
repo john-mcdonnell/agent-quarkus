@@ -1,5 +1,5 @@
 ---
-description: Stripe uses the official blocking SDK behind an adapter; event-loop callers offload with @RunOnVirtualThread, never the worker pool
+description: Stripe uses the official blocking SDK behind an adapter; event-loop callers offload with @RunOnVirtualThread, never the worker pool; API key is env then ${sm//}
 globs: "**/*.{java,kt,properties,yml,yaml}"
 alwaysApply: false
 ---
@@ -8,7 +8,14 @@ alwaysApply: false
 
 Talk to Stripe with the official **stripe-java** SDK (`StripeClient`), not a Quarkus REST client. Wrap `StripeClient` in an adapter. The adapter is **blocking**. That is the cost of the SDK; do not pretend the HTTP call is non-blocking.
 
-Do **not** hardcode the secret key. Inject it from config (environment first).
+## API key
+
+Evaluate the Stripe secret key in this order. Do not hardcode it. Do not load it in `@PostConstruct`. Add `quarkus-config-yaml` and `quarkus-google-cloud-secret-manager`. Do not also define the same key in `application.properties`.
+
+1. **Environment variable** `STRIPE_API_KEY` — overrides everything else. Use this for tests.
+2. **`application.yaml`** — `${STRIPE_API_KEY:${sm//stripe-api-key}}`. Same env var; GCP Secret Manager only if that variable is **unset**.
+
+An **empty** env var counts as set (it does not fall through to Secret Manager). If the env var is unset and Secret Manager cannot be read, **startup must fail**. Do not catch that. `${sm//stripe-api-key}` is the secret id (latest, default project). Inject `stripe.api-key` into the `StripeClient` producer.
 
 ## Thread policy
 
@@ -23,6 +30,11 @@ A resource that needs the SDK result **cannot** stay a `Uni` event-loop method. 
 Default `HttpURLConnection` can pin a carrier. Do not "fix" pinning with `@Blocking`.
 
 ## Example
+
+```yaml
+stripe:
+  api-key: ${STRIPE_API_KEY:${sm//stripe-api-key}}
+```
 
 ```kotlin
 @ApplicationScoped
