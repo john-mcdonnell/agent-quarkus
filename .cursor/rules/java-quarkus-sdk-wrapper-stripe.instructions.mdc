@@ -1,5 +1,5 @@
 ---
-description: Stripe uses the official blocking SDK behind an adapter; event-loop callers offload with @RunOnVirtualThread, never the worker pool; API key is env then ${sm//}
+description: Stripe uses a very thin blocking SDK adapter that returns repo DTOs only, never SDK types or business logic; event-loop callers offload with @RunOnVirtualThread; API key is env then ${sm//}
 globs: "**/adapter/**/*.{java,kt},**/src/test/adapter/**/*.{java,kt},**/application.yml,**/application.yaml,**/application.properties"
 alwaysApply: false
 ---
@@ -7,6 +7,14 @@ alwaysApply: false
 # Stripe: official SDK, blocking adapter, virtual-thread offload
 
 Talk to Stripe with the official **stripe-java** SDK (`StripeClient`), not a Quarkus REST client. Wrap `StripeClient` in an adapter. The adapter is **blocking**. That is the cost of the SDK; do not pretend the HTTP call is non-blocking.
+
+## Thin adapter — no business logic
+
+The SDK wrapper **must never, under any circumstances**, contain business logic. It **must** be **very thin**: call the SDK, populate a repo type from the result, return.
+
+The adapter **may** populate a model with data returned from the SDK (copy fields). Copying inbound DTO fields onto SDK request params is the same: field copy, not a transformation. It **must not** aggregate, summarise, or otherwise transform that data. Those transformations belong in a **business layer**, not the adapter.
+
+The adapter **must not** return SDK models (`PaymentIntent`, `Customer`, or any other `com.stripe` type). It **must** return a DTO class **defined in this repo**. Do not leak SDK types on the adapter method signature (parameters or return type).
 
 ## API key
 
@@ -37,6 +45,10 @@ stripe:
 ```
 
 ```kotlin
+data class CreatePaymentIntentCommand(val amount: Long, val currency: String)
+
+data class PaymentIntentDto(val id: String, val status: String)
+
 @ApplicationScoped
 class StripeClientProducer {
     @Produces
@@ -50,8 +62,10 @@ class StripeClientProducer {
 class StripePaymentAdapter(
     private val stripeClient: StripeClient,
 ) {
-    fun createPaymentIntent(params: PaymentIntentCreateParams): PaymentIntent =
-        stripeClient.v1().paymentIntents().create(params)
+    fun createPaymentIntent(command: CreatePaymentIntentCommand): PaymentIntentDto {
+        val created = stripeClient.v1().paymentIntents().create(toStripeParams(command))
+        return PaymentIntentDto(id = created.id, status = created.status)
+    }
 }
 
 @Path("/payments")
@@ -60,10 +74,10 @@ class PaymentResource(
 ) {
     @POST
     @RunOnVirtualThread
-    fun create(request: CreatePaymentRequest): PaymentResponse {
-        val intent = stripePaymentAdapter.createPaymentIntent(toParams(request))
-        return PaymentResponse(intent.id)
-    }
+    fun create(request: CreatePaymentRequest): PaymentIntentDto =
+        stripePaymentAdapter.createPaymentIntent(
+            CreatePaymentIntentCommand(amount = request.amount, currency = request.currency),
+        )
 }
 ```
 
@@ -77,6 +91,13 @@ class StripePaymentAdapter(
     @RunOnVirtualThread
     fun createPaymentIntent(params: PaymentIntentCreateParams): PaymentIntent =
         stripeClient.v1().paymentIntents().create(params)
+
+    fun totalsForCustomer(customerId: String): Long {
+        val list = stripeClient.v1().paymentIntents().list(
+            PaymentIntentListParams.builder().setCustomer(customerId).build(),
+        )
+        return list.data.sumOf { it.amount }
+    }
 }
 
 @Path("/payments")
