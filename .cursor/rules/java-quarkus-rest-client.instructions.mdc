@@ -1,6 +1,6 @@
 ---
 description: Quarkus REST clients use a logical configKey, Uni returns, per-client timeouts, retry, circuit breakers, env-first ${sm//} at startup, and a 60-minute Secret Manager refresh
-globs: "**/*.{java,kt,properties,yml,yaml}"
+globs: "**/api/**/*.{java,kt},**/src/test/api/**/*.{java,kt},**/application.yml,**/application.yaml,**/application.properties"
 alwaysApply: false
 ---
 

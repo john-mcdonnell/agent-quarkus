@@ -1,6 +1,6 @@
 ---
 description: Stripe uses the official blocking SDK behind an adapter; event-loop callers offload with @RunOnVirtualThread, never the worker pool; API key is env then ${sm//}
-globs: "**/*.{java,kt,properties,yml,yaml}"
+globs: "**/adapter/**/*.{java,kt},**/src/test/adapter/**/*.{java,kt},**/application.yml,**/application.yaml,**/application.properties"
 alwaysApply: false
 ---
 

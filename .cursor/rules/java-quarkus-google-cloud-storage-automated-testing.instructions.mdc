@@ -1,6 +1,6 @@
 ---
 description: Quarkus GCS get/put tests use in-process LocalStorageHelper; do not Mockito Storage or call real GCS
-globs: "**/*.{java,kt,yml,yaml}"
+globs: "**/service/gcs/**/*.{java,kt},**/src/test/service/gcs/**/*.{java,kt},**/application.yml,**/application.yaml,**/application.properties"
 alwaysApply: false
 ---
 

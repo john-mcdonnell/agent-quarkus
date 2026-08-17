@@ -1,6 +1,6 @@
 ---
 description: Quarkus apps use SmallRye Health OOTB probes at /q/health; do not invent a JAX-RS health resource
-globs: "**/*.{java,kt,yml,yaml}"
+globs: "**/*.{java,kt},**/application.yml,**/application.yaml,**/application.properties"
 alwaysApply: false
 ---
 

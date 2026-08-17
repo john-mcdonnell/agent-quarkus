@@ -1,6 +1,6 @@
 ---
 description: Quarkus REST controllers are covered by inbound HTTP integration tests with in-repo WireMock; do not mock REST clients
-globs: "**/*.{java,kt,yml,yaml}"
+globs: "**/api/**/*.{java,kt},**/src/test/api/**/*.{java,kt},**/application.yml,**/application.yaml,**/application.properties"
 alwaysApply: false
 ---
 

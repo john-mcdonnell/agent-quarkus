@@ -1,6 +1,6 @@
 ---
 description: Quarkus non-blocking code uses Mutiny on the event loop; not coroutines
-globs: "**/*.{java,kt}"
+globs: "**/api/**/*.{java,kt},**/src/test/api/**/*.{java,kt}"
 alwaysApply: false
 ---
 

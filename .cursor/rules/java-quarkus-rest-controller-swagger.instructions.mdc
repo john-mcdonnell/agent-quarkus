@@ -1,6 +1,6 @@
 ---
 description: Quarkus REST controllers document OpenAPI with MicroProfile annotations and log every inbound request in GCP JSON format
-globs: "**/*.{java,kt,yml,yaml}"
+globs: "**/api/**/*.{java,kt}"
 alwaysApply: false
 ---
 
