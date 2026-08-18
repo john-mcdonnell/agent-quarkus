@@ -1,5 +1,5 @@
 ---
-description: Stripe uses a very thin blocking SDK adapter that returns repo DTOs only; mock that adapter with Mockito under @QuarkusTest; event-loop callers offload with @RunOnVirtualThread; API key is env then ${sm//}
+description: Stripe uses a very thin blocking SDK adapter that returns repo DTOs only and fully pages lists inside the adapter; mock that adapter with Mockito under @QuarkusTest; event-loop callers offload with @RunOnVirtualThread; API key is env then ${sm//}
 globs: "**/adapter/**/*.{java,kt},**/src/test/adapter/**/*.{java,kt},**/application.yml,**/application.yaml,**/application.properties"
 alwaysApply: false
 ---
@@ -15,6 +15,8 @@ The SDK wrapper **must never, under any circumstances**, contain business logic.
 The adapter **may** populate a model with data returned from the SDK (copy fields). Copying inbound DTO fields onto SDK request params is the same: field copy, not a transformation. It **must not** aggregate, summarise, or otherwise transform that data. Those transformations belong in a **business layer**, not the adapter.
 
 The adapter **must not** return SDK models (`PaymentIntent`, `Customer`, or any other `com.stripe` type). It **must** return a DTO class **defined in this repo**. Do not leak SDK types on the adapter method signature (parameters or return type).
+
+When Stripe paginates a list, the adapter **must** return **all** pages in **one** call. Walk every page inside the adapter (`autoPagingIterable` or equivalent). Return a `List` of repo DTOs. The caller must not see page size, `has_more`, `starting_after`, or any other paging token. Walking pages is SDK encapsulation, not business logic. Do not aggregate, summarise, or join types while paging.
 
 Because the wrapper is that thin, **mock it** in automated tests. Use **`@QuarkusTest`** and Mockito **`@InjectMock`** on the adapter. Inject the real caller with CDI (`@Inject`). Return repo DTOs. Do not use `MockitoExtension`, `@Mock`, or `@InjectMocks`. Do not mock `StripeClient`. Do not call Stripe. Do not stub `com.stripe` models. Fixture values are **UUIDs** so tests stay isolated under parallel runs. `@QuarkusTest` still boots the app. Put **every** property override in `getConfigOverrides()` — not only `STRIPE_API_KEY`. **Use this instead of a test `application.yaml`** (or `application.yml` / `application.properties`). Do not add those files for test overrides. Do **not** copy shared keys onto every test class. Put shared overrides (including `STRIPE_API_KEY`, so `${STRIPE_API_KEY:${sm//…}}` does not call Secret Manager) on a **reusable** `QuarkusTestProfile`. Point tests at that profile with `@TestProfile`. Test-only extras: a subclass that merges `super.getConfigOverrides()` with more keys.
 
@@ -68,6 +70,13 @@ class StripePaymentAdapter(
         val created = stripeClient.v1().paymentIntents().create(toStripeParams(command))
         return PaymentIntentDto(id = created.id, status = created.status)
     }
+
+    fun listPaymentIntents(): List<PaymentIntentDto> =
+        stripeClient.v1().paymentIntents()
+            .list(PaymentIntentListParams.builder().setLimit(100).build())
+            .autoPagingIterable()
+            .map { PaymentIntentDto(id = it.id, status = it.status) }
+            .toList()
 }
 
 @Path("/payments")
@@ -128,6 +137,13 @@ class StripePaymentAdapter(
             PaymentIntentListParams.builder().setCustomer(customerId).build(),
         )
         return list.data.sumOf { it.amount }
+    }
+
+    fun listPaymentIntentsPage(startingAfter: String?): PaymentIntentListPage {
+        val params = PaymentIntentListParams.builder().setLimit(100)
+        if (startingAfter != null) params.setStartingAfter(startingAfter)
+        val page = stripeClient.v1().paymentIntents().list(params.build())
+        return PaymentIntentListPage(page.data, page.hasMore)
     }
 }
 
