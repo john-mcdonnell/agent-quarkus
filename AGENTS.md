@@ -40,6 +40,8 @@ When creating or editing GitHub Copilot instructions, skills, or agents, follow 
   - **Do not complete work on failing gates:** report failing gate(s) and key error summary.
 * **MUST** treat repository-scoped Gradle wrapper commands (`./gradlew ...`) as pre-approved and run them without requesting additional confirmation.
 * **MUST NOT** “improve” design defaults, or carry out significant refactoring, or modify the architecture (`ARCHITECTURE.md`) without an explicit request.
+* **MUST NOT** modify the README (`README.md`) without an explicit request.
+* **MUST NOT** change any content (files or folders) in `docs/requirements`.
 * **MUST** maintain minimum diff (include this directive when delegating to sub-agents); preserve existing line shape unless asked to reflow.
 
 ## Environment and installation scope
