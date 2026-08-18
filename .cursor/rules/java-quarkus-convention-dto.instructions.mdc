@@ -1,0 +1,62 @@
+---
+description: Repo DTOs use factories on the type; SDK mapping stays in the adapter; no mapper layer
+globs: "**/adapter/**/*.{java,kt},**/domain/model/**/*.{java,kt},**/src/test/adapter/**/*.{java,kt},**/src/test/domain/model/**/*.{java,kt}"
+alwaysApply: false
+---
+
+# DTOs: factories on the type, no mapper layer
+
+Do not add a mapper package or `*Mapper` classes. Mapping lives on the type that owns the boundary.
+
+**Adapter:** the last lines of the wrapper copy vendor SDK fields onto a DTO **defined in this repo**. Do not return SDK types. Do not put vendor `from…` factories (`fromStripeAccount`, `fromBlob`, and the like) on domain types — that imports the SDK into the domain.
+
+**Domain model:** factories take **repo** types only (adapter DTOs and other models). CSV output is a method on the row type. The handler calls adapters, then those factories, then persistence.
+
+A mapper class is only justified if the maps become large enough that the adapter or the row type is unreadable. Seventeen CSV columns is not that.
+
+## Example
+
+```kotlin
+fun retrieveAccount(): AccountDto {
+    val account = stripeClient.v1().accounts().retrieve()
+    return AccountDto(
+        id = account.id,
+        displayName = account.settings?.dashboard?.displayName,
+        branchName = account.metadata?.get("branch_name"),
+        branchNumber = account.metadata?.get("branch_number"),
+    )
+}
+
+data class InventoryRow(
+    val accountId: String,
+    val terminalId: String,
+    val locationDisplayName: String?,
+) {
+    companion object {
+        fun from(account: AccountDto, terminal: TerminalDto, location: LocationDto?): InventoryRow =
+            InventoryRow(
+                accountId = account.id,
+                terminalId = terminal.id,
+                locationDisplayName = location?.displayName,
+            )
+    }
+
+    fun toCsvLine(): String = "$accountId,$terminalId,${locationDisplayName ?: ""}"
+}
+```
+
+## Do not
+
+```kotlin
+data class AccountDto(val id: String) {
+    companion object {
+        fun fromStripeAccount(account: com.stripe.model.Account): AccountDto =
+            AccountDto(id = account.id)
+    }
+}
+
+class InventoryMapper {
+    fun toRow(account: AccountDto, terminal: TerminalDto): InventoryRow =
+        InventoryRow(accountId = account.id, terminalId = terminal.id, locationDisplayName = null)
+}
+```
