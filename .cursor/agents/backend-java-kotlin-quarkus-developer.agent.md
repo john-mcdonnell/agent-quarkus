@@ -72,7 +72,7 @@ If blocked:
 
 ## Assumptions
 
-- Java 21+ is installed and in PATH
+- Java 25 is installed and in PATH
 - Kotlin and Quarkus dependencies are managed by Gradle
 - All external service stubs used in tests live in the repo; do not call real downstream systems from tests
 - Credentials for any private package registry used by the service are available
