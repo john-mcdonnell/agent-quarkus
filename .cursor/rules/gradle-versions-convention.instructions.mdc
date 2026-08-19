@@ -1,0 +1,50 @@
+---
+description: >-
+  Gradle pins the latest generally available patch of the current line; no
+  RC/alpha/beta; Kotlin plugin supplies stdlib; BOMs stay aligned
+globs: "**/build.gradle.kts,**/build.gradle,**/settings.gradle.kts,**/settings.gradle,**/gradle.properties,**/gradle/wrapper/gradle-wrapper.properties,**/libs.versions.toml"
+alwaysApply: false
+---
+
+# Gradle: generally available versions
+
+Pin the **latest generally available** release of the line already in use (Kotlin bugfix, Gradle patch, platform micro). Do not take the next feature, preview, milestone, snapshot, RC, alpha, or beta.
+
+If **no GA** exists that can compile this language, JDK, and Gradle, keep the current compatible pre-release. Do not downgrade to an older GA that cannot build. Do not jump to a newer pre-release just because it exists.
+
+Keep one version for a family: Kotlin `jvm` and `allopen` match; Quarkus plugin, platform BOM, and Google Cloud services BOM match. Direct libraries not on a BOM use the latest **stable** Maven Central coordinate.
+
+Do not declare `kotlin-stdlib-jdk7` or `kotlin-stdlib-jdk8`. Those artefacts merged into `kotlin-stdlib`; the Kotlin Gradle plugin already adds it.
+
+Upgrade the wrapper with the same distribution type (`bin` or `all`). Set `distributionSha256Sum` from the official checksum for that zip.
+
+```properties
+# gradle.properties — plugin and BOM are the same GA micro
+quarkusPluginId=io.quarkus
+quarkusPluginVersion=3.38.2
+quarkusPlatformGroupId=io.quarkus.platform
+quarkusPlatformArtifactId=quarkus-bom
+quarkusPlatformVersion=3.38.2
+```
+
+```properties
+# gradle/wrapper/gradle-wrapper.properties — latest GA patch of this Gradle line
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionSha256Sum=61ba77b3ff7167e60962763eb4bae79db7120c189b9544358d0ade3c1e712a83
+distributionUrl=https\://services.gradle.org/distributions/gradle-9.6.1-all.zip
+validateDistributionUrl=true
+```
+
+```kotlin
+plugins {
+    kotlin("jvm") version "2.4.10"
+    kotlin("plugin.allopen") version "2.4.10"
+}
+
+dependencies {
+    implementation(enforcedPlatform("$quarkusPlatformGroupId:$quarkusPlatformArtifactId:$quarkusPlatformVersion"))
+    implementation(enforcedPlatform("$quarkusPlatformGroupId:quarkus-google-cloud-services-bom:$quarkusPlatformVersion"))
+    // Do not add org.jetbrains.kotlin:kotlin-stdlib-jdk8
+}
+```
