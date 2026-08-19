@@ -1,0 +1,67 @@
+---
+description: >-
+  JaCoCo excludes whole untestable classes only; Gradle verification fails the
+  build below 80% instructions, 100% lines, 70% branches
+globs: "**/build.gradle.kts,**/build.gradle,**/gradle.properties,**/application.properties,**/application.yml,**/application.yaml,**/src/**/*.{java,kt}"
+alwaysApply: false
+---
+
+# JaCoCo: class excludes and failing thresholds
+
+JaCoCo cannot ignore a source line range. Do not use `SOURCE`-retention `@Generated` as an ignore (it never reaches bytecode). Exclude a **class** only when tests must not run it:
+
+- Thin vendor SDK wrappers (and their client producers) that tests **mock** and must not call.
+- Process lifecycle that only runs outside the test launch mode (one-shot job `run` then process exit).
+
+Use the **same** class set for the HTML/XML report and for `jacocoTestCoverageVerification`. A missing resource (`get == null`) is not an API failure; do not catch a vendor exception and return `false` solely to paint a catch line green, and do not mock a client the project forbids mocking just to hit that catch.
+
+**Fail the build** when covered ratio is below: instructions **0.80**, lines **1.00**, branches **0.70**. Wire `check` (and `test`) to `jacocoTestCoverageVerification`. Thresholds live in `gradle.properties`. If tests run under a Quarkus classloader, write the Quarkus exec file and exclude `*QuarkusClassLoader` from the JUnit agent; do not treat a framework HTML report as the gate if it ignores these excludes.
+
+```properties
+# gradle.properties
+jacoco.minimum.instruction=0.80
+jacoco.minimum.line=1.00
+jacoco.minimum.branch=0.70
+```
+
+```properties
+# application.properties — Gradle is the gate; skip a second HTML report that ignores excludes
+quarkus.jacoco.report=false
+```
+
+```kotlin
+val jacocoMainClasses =
+    layout.buildDirectory.dir("classes/kotlin/main").map { dir ->
+        fileTree(dir) {
+            exclude("**/VendorSdkAdapter*")
+            exclude("**/VendorClientProducer*")
+            exclude("**/JobLifecycleObserver*")
+        }
+    }
+
+tasks.withType<JacocoReportBase>().configureEach {
+    classDirectories.setFrom(jacocoMainClasses)
+}
+
+tasks.jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            limit {
+                counter = "INSTRUCTION"
+                minimum = providers.gradleProperty("jacoco.minimum.instruction").get().toBigDecimal()
+            }
+            limit {
+                counter = "LINE"
+                minimum = providers.gradleProperty("jacoco.minimum.line").get().toBigDecimal()
+            }
+            limit {
+                counter = "BRANCH"
+                minimum = providers.gradleProperty("jacoco.minimum.branch").get().toBigDecimal()
+            }
+        }
+    }
+}
+
+tasks.test { finalizedBy(tasks.jacocoTestReport, tasks.jacocoTestCoverageVerification) }
+tasks.check { dependsOn(tasks.jacocoTestCoverageVerification) }
+```
