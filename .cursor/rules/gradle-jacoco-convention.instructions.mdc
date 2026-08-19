@@ -2,7 +2,7 @@
 description: >-
   JaCoCo excludes whole untestable classes only; Gradle verification fails the
   build below 80% instructions, 100% lines, 70% branches
-globs: "**/build.gradle.kts,**/build.gradle,**/gradle.properties,**/application.properties,**/application.yml,**/application.yaml,**/src/**/*.{java,kt}"
+globs: "**/build.gradle.kts,**/build.gradle,**/gradle.properties,**/application.properties,**/application.yml,**/application.yaml"
 alwaysApply: false
 ---
 
