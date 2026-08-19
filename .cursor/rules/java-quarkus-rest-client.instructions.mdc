@@ -1,5 +1,5 @@
 ---
-description: Quarkus REST clients use a logical configKey, Uni returns, per-client timeouts, retry, circuit breakers, env-first ${sm//} at startup, and a 60-minute Secret Manager refresh
+description: Quarkus REST clients use a logical configKey, Uni returns, per-client timeouts, retry, circuit breakers, and Authorization from a header factory
 globs: "**/api/**/*.{java,kt},**/src/test/api/**/*.{java,kt},**/application.yml,**/application.yaml,**/application.properties"
 alwaysApply: false
 ---
@@ -40,8 +40,6 @@ interface ProductClient {
 
 Inject with `@RestClient`. Do not call `.await()` / `.get()` on the `Uni` from event-loop code.
 
-A YAML key is either a scalar or a map, not both. Put the secret in `api-key.value` and the interval in `api-key.refresh-minutes` (siblings). Do not set `pos-client.api-key` as a string.
-
 ## Timeouts (two layers)
 
 - **HTTP:** `connect-timeout` and `read-timeout` (milliseconds) per `configKey`.
@@ -78,15 +76,11 @@ quarkus:
 
 ## Security
 
-Credentials are **per `configKey`**. Do not share one token or user across clients. Do not mix Bearer and Basic on the same client. Do not hardcode secrets. Do **not** use `@PostConstruct` to load credentials. Do **not** set `quarkus.rest-client.logging.masked-headers` (keep the framework default, which already masks `Authorization`).
+Credentials are **per `configKey`**. Do not share one token or user across clients. Do not mix Bearer and Basic on the same client. Do **not** set `quarkus.rest-client.logging.masked-headers` (keep the framework default, which already masks `Authorization`).
 
-**Startup (required):** environment variable first; GCP Secret Manager **only if that variable is unset**. Use `${ENV_NAME:${sm//secret-id}}` in `application.yaml`. Add `quarkus-google-cloud-secret-manager`. If the env var is unset and Secret Manager cannot be read, **startup must fail**. Do not catch that. An **empty** env var counts as set. `${sm//secret-id}` is the secret id (latest, default project).
-
-**Hot-rotate (required):** after startup, a `@Scheduled` job re-reads Secret Manager every N minutes (N from `application.yaml`; hardcode `m` in the annotation). Add `quarkus-scheduler`. Do not use `@PostConstruct` — `${sm//}` already supplied the first value. A **successful** read **replaces** the key (that is the rotate). A **failed** read logs at ERROR, keeps the current key for this interval, and **tries again on the next schedule** — it does not stop refreshing. Do not crash on a failed refresh. If the env var is set, skip SM on the schedule. Downstream must accept old and new keys for at least `refresh-minutes` plus in-flight time.
+Do not pass the key as a method argument. Do not set `quarkus.rest-client.<configKey>.headers.Authorization` (that header is frozen). The factory sends `Authorization` from the **current** secret value. Do not call Secret Manager from the factory.
 
 ### API Key as Bearer Token
-
-Do not pass the key as a method argument. Do not set `quarkus.rest-client.<configKey>.headers.Authorization` (that header is frozen). The factory sends `Bearer` and refreshes it. Inject `pos-client.api-key.value`, not `pos-client.api-key`.
 
 ```kotlin
 @RegisterRestClient(configKey = "pos-client")
@@ -96,54 +90,31 @@ interface PosDeviceClient { ... }
 
 ```kotlin
 @ApplicationScoped
-class PosClientHeaders : ReactiveClientHeadersFactory() {
-
-    // Only the process environment (or equivalent). Not the SM-cached key.
-    @ConfigProperty(name = "POS_CLIENT_API_KEY", defaultValue = "")
-    lateinit var apiKeyFromEnv: String
-
-    @ConfigProperty(name = "pos-client.api-key.value")
-    lateinit var apiKeyAtStartup: String
-
-    private val apiKeyFromSecretManager = AtomicReference<String?>(null)
-
-    @Scheduled(every = "${pos-client.api-key.refresh-minutes}m")
-    fun refresh() {
-        if (apiKeyFromEnv.isNotBlank()) return
-        try {
-            apiKeyFromSecretManager.set(accessLatest("pos-client-api-key"))
-        } catch (e: Exception) {
-            Log.errorf(e, "pos-client API key refresh from Secret Manager failed")
-        }
-    }
+class PosClientHeaders(
+    private val posClientApiKey: PosClientApiKey,
+) : ReactiveClientHeadersFactory() {
 
     override fun getHeaders(
         incoming: MultivaluedMap<String, String>,
         outgoing: MultivaluedMap<String, String>,
     ): Uni<MultivaluedMap<String, String>> =
         Uni.createFrom().item {
-            val value = apiKeyFromEnv.ifBlank {
-                apiKeyFromSecretManager.get() ?: apiKeyAtStartup
-            }
-            outgoing.putSingle("Authorization", "Bearer $value")
+            outgoing.putSingle("Authorization", "Bearer ${posClientApiKey.current()}")
             outgoing
         }
 }
 ```
 
-Same for `product-client`. Run SM access off the event loop.
+Same for `product-client`. Use a current-value holder per `configKey`, not one shared secret for every client.
 
 ### Basic Auth
 
-Startup still uses `${ENV:${sm//…}}` so a missing secret fails boot. `@ClientBasicAuth` cannot hot-rotate. Use the same factory pattern and set `Authorization: Basic` (Base64 of `user:password`) from env, else last refreshed SM values, else the startup config.
+`@ClientBasicAuth` cannot hot-rotate. Use the same factory pattern and set `Authorization: Basic` (Base64 of `user:password`) from the current username and password secrets.
 
 ## `application.yaml`
 
 ```yaml
 quarkus:
-  google:
-    cloud:
-      project-id: ${GCP_PROJECT_ID}
   log:
     category:
       "org.jboss.resteasy.reactive.client.logging":
@@ -192,18 +163,4 @@ quarkus:
         failure-ratio: 0.5
         delay: 5s
         success-threshold: 2
-
-pos-client:
-  api-key:
-    value: ${POS_CLIENT_API_KEY:${sm//pos-client-api-key}}
-    refresh-minutes: 60
-  username: ${POS_CLIENT_USERNAME:${sm//pos-client-username}}
-  password: ${POS_CLIENT_PASSWORD:${sm//pos-client-password}}
-
-product-client:
-  api-key:
-    value: ${PRODUCT_CLIENT_API_KEY:${sm//product-client-api-key}}
-    refresh-minutes: 60
-  username: ${PRODUCT_CLIENT_USERNAME:${sm//product-client-username}}
-  password: ${PRODUCT_CLIENT_PASSWORD:${sm//product-client-password}}
 ```
